@@ -1,0 +1,14 @@
+Running: airflow dags list-import-errors
+2026-10-20T04:58:53.671763Z [warning  ] Astro managed secrets backend is disabled [astronomer.runtime.plugin.AstronomerRuntimePlugin] loc=plugin.py:125
+2026-10-20T04:58:53.681514Z [warning  ] FileType is deprecated. Simply open files after parsing arguments. [py.warnings] category=PendingDeprecationWarning filename=/usr/local/lib/python3.14/site-packages/airflow/cli/cli_config.py lineno=646
+2026-10-20T04:58:53.681939Z [warning  ] FileType is deprecated. Simply open files after parsing arguments. [py.warnings] category=PendingDeprecationWarning filename=/usr/local/lib/python3.14/site-packages/airflow/cli/cli_config.py lineno=868
+2026-10-20T04:58:53.895420Z [warning  ] Could not import graphviz. Rendering graph to the graphical format will not be possible. 
+You might need to install the graphviz package and necessary system packages.
+Run `pip install graphviz` to attempt to install it. [py.warnings] category=UserWarning filename=/usr/local/lib/python3.14/site-packages/airflow/cli/commands/dag_command.py lineno=57
+2026-10-20T04:58:54.149269Z [info     ] setup plugin alembic.autogenerate.schemas [alembic.runtime.plugins] loc=plugins.py:37
+2026-10-20T04:58:54.149415Z [info     ] setup plugin alembic.autogenerate.tables [alembic.runtime.plugins] loc=plugins.py:37
+2026-10-20T04:58:54.149483Z [info     ] setup plugin alembic.autogenerate.types [alembic.runtime.plugins] loc=plugins.py:37
+2026-10-20T04:58:54.149558Z [info     ] setup plugin alembic.autogenerate.constraints [alembic.runtime.plugins] loc=plugins.py:37
+2026-10-20T04:58:54.149628Z [info     ] setup plugin alembic.autogenerate.defaults [alembic.runtime.plugins] loc=plugins.py:37
+2026-10-20T04:58:54.149735Z [info     ] setup plugin alembic.autogenerate.comments [alembic.runtime.plugins] loc=plugins.py:37
+No data found
