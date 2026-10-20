@@ -1,0 +1,25 @@
+.git
+.env
+.DS_Store
+airflow_settings.yaml
+__pycache__/
+astro
+.venv
+.astro/standalone/
+airflow-webserver.pid
+webserver_config.py
+airflow.cfg
+airflow.db
+.astro/*.local.yml
+.astro/*.local.yaml
+test_api.py 
+.venv-profile/
+
+# NammaMart pipeline runtime output
+include/warehouse_*.duckdb
+include/work/
+include/quarantine/pradeep/
+.venv-profile/
+
+# NammaMart bonus outputs (rebuilt on every run)
+include/reports/
