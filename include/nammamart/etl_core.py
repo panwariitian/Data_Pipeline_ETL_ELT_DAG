@@ -265,6 +265,10 @@ DDL = {
         gross_margin DOUBLE, within_15_min BOOLEAN, source_file VARCHAR, source_seq INTEGER,
         source_row INTEGER, _run_id VARCHAR, _loaded_at TIMESTAMP)""",
 }
+HISTORY_DDL = {
+    "etl_dim_customer_history": """(customer_key VARCHAR, customer_id VARCHAR, loyalty_tier VARCHAR,
+        valid_from TIMESTAMP, valid_to TIMESTAMP, is_current BOOLEAN, _run_id VARCHAR, _loaded_at TIMESTAMP)""",
+}
 AUDIT_DDL = {
     "dq_results": """(run_id VARCHAR, dag_id VARCHAR, check_name VARCHAR, dimension VARCHAR, severity VARCHAR,
         rows_checked BIGINT, rows_failed BIGINT, status VARCHAR, checked_at TIMESTAMP)""",
@@ -276,7 +280,7 @@ AUDIT_DDL = {
 
 
 def ensure_tables(con) -> None:
-    for name, ddl in {**DDL, **AUDIT_DDL}.items():
+    for name, ddl in {**DDL, **HISTORY_DDL, **AUDIT_DDL}.items():
         con.execute(f"CREATE TABLE IF NOT EXISTS {name} {ddl}")
     con.execute("ALTER TABLE etl_fact_orders ADD COLUMN IF NOT EXISTS source_row INTEGER")
 
@@ -307,11 +311,36 @@ def _upsert(con, table: str, key: str, df: pd.DataFrame, run_id: str, guard_seq:
         con.unregister("incoming")
 
 
+def _scd2_customers(con, dim_customer: pd.DataFrame, run_id: str, now) -> dict:
+    """Slowly changing dimension, type 2: a customer gets a new version when its loyalty tier changes.
+    The old version ends at the run time (valid_to, is_current = FALSE) and the new one starts there.
+    A re-run with no tier change adds nothing. History starts at the first load: earlier changes are unknown."""
+    open_tier = dict(con.execute("SELECT customer_id, loyalty_tier FROM etl_dim_customer_history "
+                                 "WHERE is_current").fetchall())
+    opened = closed = 0
+    for cid, tier in zip(dim_customer.customer_id, dim_customer.loyalty_tier):
+        tier = "Unknown" if pd.isna(tier) else tier
+        if open_tier.get(cid) == tier:
+            continue
+        if cid in open_tier:
+            con.execute("UPDATE etl_dim_customer_history SET valid_to = ?, is_current = FALSE "
+                        "WHERE customer_id = ? AND is_current", [now, cid])
+            closed += 1
+        version = con.execute("SELECT count(*) + 1 FROM etl_dim_customer_history WHERE customer_id = ?",
+                              [cid]).fetchone()[0]
+        con.execute("INSERT INTO etl_dim_customer_history VALUES (?, ?, ?, ?, NULL, TRUE, ?, ?)",
+                    [f"{cid}-{version}", cid, tier, now, run_id, now])
+        opened += 1
+    print(f"[scd2] customers: {opened} versions opened, {closed} closed (tier changes)")
+    return {"opened": opened, "closed": closed}
+
+
 def load(run_id: str, t: dict) -> dict:
     con = cfg.connect()
     try:
         ensure_tables(con)
         p = t["paths"]
+        _scd2_customers(con, pd.read_pickle(p["dim_customer"]), run_id, cfg.now_ist_naive())
         _upsert(con, "etl_dim_customer", "customer_id", pd.read_pickle(p["dim_customer"]), run_id)
         _upsert(con, "etl_dim_product", "product_id", pd.read_pickle(p["dim_product"]), run_id)
         _upsert(con, "etl_dim_store", "store_id", pd.read_pickle(p["dim_store"]), run_id)
@@ -427,6 +456,23 @@ def report(run_id: str) -> dict:
 
 
 # -------------------------------------------------------------------- audit
+def capacity_check(con, run_id: str, now) -> dict:
+    """Orders per store per day against capacity_orders_per_day. Warning only: the orders still load."""
+    daily = con.execute("""SELECT f.store_id, f.order_date, s.capacity_orders_per_day AS capacity, count(*) AS orders
+                           FROM etl_fact_orders f JOIN etl_dim_store s USING (store_id)
+                           GROUP BY 1, 2, 3 ORDER BY 1, 2""").df()
+    over = daily.orders > daily.capacity.fillna(0)
+    daily["over_capacity"] = over
+    daily["_run_id"] = run_id
+    con.register("cap", daily)
+    con.execute("CREATE OR REPLACE TABLE etl_store_capacity AS SELECT * FROM cap")
+    con.unregister("cap")
+    failed = int(over.sum())
+    return dict(run_id=run_id, dag_id=DAG_ID, check_name="capacity.daily_orders_within_capacity",
+                dimension="Accuracy", severity="Warning", rows_checked=len(daily), rows_failed=failed,
+                status="PASS" if failed == 0 else "WARN", checked_at=now)
+
+
 def _naive_ist(t):
     return t.astimezone(cfg.IST).replace(tzinfo=None) if getattr(t, "tzinfo", None) else t
 
@@ -461,6 +507,8 @@ def audit(run_id: str, start_time, end_time, expected_ok: bool) -> dict:
     con = cfg.connect()
     try:
         ensure_tables(con)
+        if status == "SUCCESS":
+            dq_rows.append(capacity_check(con, run_id, now))
         for table, rows in (("dq_results", dq_rows), ("etl_quarantine", q_rows)):
             con.execute(f"DELETE FROM {table} WHERE run_id = ?" + (" AND dag_id = ?" if table == "dq_results" else ""),
                         [run_id, DAG_ID] if table == "dq_results" else [run_id])

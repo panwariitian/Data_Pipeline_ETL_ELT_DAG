@@ -9,8 +9,8 @@ Everything below comes from runs on my machine (Astro runtime 3.3 on Colima/Dock
 | Path | What it is |
 |---|---|
 | `dags/nammamart_etl_pradeep.py`, `dags/nammamart_elt_pradeep.py` | The two DAGs. They only wire tasks together. |
-| `include/nammamart/` | `config.py`, `quality.py` (ETL rules), `masking.py`, `etl_core.py`, `elt_core.py` |
-| `include/sql/elt/*.sql` | Every ELT transformation: init, five staging files, mart files |
+| `include/nammamart/` | `config.py`, `quality.py` (ETL rules), `masking.py`, `etl_core.py`, `elt_core.py`, `alerts.py` (Slack failure alert), `dq_trend.py` (quality chart) |
+| `include/sql/elt/*.sql` | Every ELT transformation: init, five staging files, mart files (including `46_mart_store_capacity.sql`) |
 | `include/sql/business_questions.sql` | The six business questions, once for ETL tables and once for ELT marts |
 | `include/profiling/` | Day-one profiling scripts, `data_issues_log.csv`, `business_questions_results.md`, `experiments/exp_*.md` |
 | `tests/` | `run_experiments.py` (Part F), `business_questions.py`, `take_screenshots.py` |
@@ -28,7 +28,7 @@ To run: `astro dev start`, unpause both DAGs, trigger them. Both finish in 10-30
 | Rows rejected | 311 | 311 |
 | Store/day KPI rows that differ between the two | 0 | 0 |
 | Payment reconciliation mismatches | 447 | 447 (0 rows differ) |
-| `dq_results` rows where `rows_failed` differs | 0 of 64 checks | 0 of 64 checks |
+| `dq_results` rows where `rows_failed` differs | 0 of 65 checks | 0 of 65 checks |
 
 ---
 
@@ -255,6 +255,11 @@ Browser screenshots are real captures of the Airflow UI. The query result images
 | `10_dq_results.png`, `11_pipeline_runs.png` | `dq_results` and `pipeline_runs` |
 | `12_*`, `13_*` | `etl_payment_reconciliation`: summary and rows |
 | `14_quarantine_file.png` | A quarantine file with `failure_reason` |
+| `15_dq_trend.png` | Bonus: data quality per run for both DAGs, built from `dq_results` |
+| `16_scd2_customer_history.png` | Bonus: one customer's three SCD Type 2 versions (Bronze, Gold, Bronze) |
+| `17_store_capacity_by_store.png` | Bonus: store-days over capacity, by store |
+| `18_dq_results_capacity_rows.png` | Bonus: the capacity check rows in `dq_results`, both pipelines |
+| `19_slack_failure_alert.png` | Bonus: the failure alert text received by a local test webhook |
 
 ---
 
@@ -262,7 +267,7 @@ Browser screenshots are real captures of the Airflow UI. The query result images
 
 **Sameer, I recommend ELT, with the finance guarantee kept as a hard gate between staging and the marts.**
 
-I built both on the same five files and ran them side by side. They give the same answer: net revenue 1,128,410.45, 311 rows rejected, 447 reconciliation mismatches, and the same count for every one of 64 quality checks. So the question is not which one is more correct. It is which one is easier to trust, audit and change.
+I built both on the same five files and ran them side by side. They give the same answer: net revenue 1,128,410.45, 311 rows rejected, 447 reconciliation mismatches, and the same result for all 65 quality checks in the latest run (37 checks flag a failure in both). So the question is not which one is more correct. It is which one is easier to trust, audit and change.
 
 **Auditability.** ELT keeps every row exactly as received (`raw_*`), with the file, row and run it came from. When finance asked me to trace ORD002103, ELT showed the raw row, the rule it broke and the proof it was not in the total from one database. ETL could show the rejected row and the rule but not the original file in the warehouse. **Quality guarantees.** ETL gives the stronger promise: a bad row never enters a reporting table. ELT matches it only by discipline, because bad rows live in staging and every mart must filter them. I built that filter and tested it, but it is a rule, not a wall. So the marts are the only thing finance gets access to. **Ease of change.** When experiments exposed gaps I added two price checks and fixed a freshness check. In ELT a rule is a SQL edit, and the raw history it would need is already in the warehouse, so a changed rule could be replayed over past loads without re-reading the source files (I have not built that replay; staging currently processes the current run's rows). In ETL a changed rule only applies to files that are extracted again. **Failures.** ETL also behaved worse in one case I did not expect: validating payments against only the day's orders file wrongly rejected about 2,100 good payments when the orders file was short. ELT did not, because its staging table remembers. I fixed ETL, but it shows validation tied to a single run's context is fragile. ELT's weakness is the opposite one: the raw load was the first thing to break on a badly formatted file. **Growth to 1000x.** Pandas holds the whole file in memory; SQL in the warehouse does not. At around 2.4 million orders a month both would still run on DuckDB, but ELT moves to a bigger warehouse by changing the engine, not the logic. **Cost.** Both are open source. ELT stores raw copies, so storage grows with every load (raw orders grew by 2,412 rows per run in my tests); a checksum skip and a retention policy keep that small.
 
@@ -276,6 +281,30 @@ I built both on the same five files and ran them side by side. They give the sam
 
 ## 10. What is not done
 
-- None of the bonus items: no Slack/e-mail alert, no SCD Type 2 customer dimension, no store-capacity check, no data-quality trend chart.
-- No history table for order status changes (see the change-history answer).
+- No order-status history table: the 10 corrected orders overwrite their old rows in both pipelines (see the change-history answer in Part E).
 - The pipelines only upsert: a row that later turns invalid is not removed from the warehouse (experiment 9).
+- SCD Type 2 is built for the ETL pipeline only. The ELT raw layer already keeps every version of every file, so it can rebuild history, but no SQL SCD table exists there.
+- The Slack alert is the only alert channel. Email is not wired up.
+- The screenshots in 01 to 14 were taken before the bonus work. The graph views show the tasks as they were then, without `dq_trend_chart` or the new capacity mart.
+
+---
+
+## 11. Bonus items
+
+All four are built, run on the same warehouse, and their evidence is in section 8 (images 15 to 19).
+
+**1. Failure alert (Slack, through an Airflow Variable).** `include/nammamart/alerts.py` is set as `on_failure_callback` in `default_args` of both DAGs. It reads `SLACK_WEBHOOK_URL` with `Variable.get`, so the URL is never in code or git. With no variable set, the alert is logged and skipped, so a missing secret cannot fail a run.
+- Test: I set the variable to a local receiver and moved `products.csv` aside for one ETL run. The alert arrived with the DAG, task, try number, run ID and error (image 19). I then removed the variable and the local receiver, so no webhook address is left anywhere. Set your own value in Admin > Variables to receive alerts.
+- The same callback also fired for `dq_trend_chart` when it had a bug, so it covers every task, not only the extracts.
+
+**2. SCD Type 2 customer dimension (ETL only).** Table `etl_dim_customer_history` has one row per customer version: `customer_key`, `customer_id`, `loyalty_tier`, `valid_from`, `valid_to`, `is_current`. Each load compares the incoming tier with the open version. A change closes the old version and opens a new one at the run time. A re-run with no change adds nothing.
+- Test (image 16): a baseline run, then C00159's tier changed from Bronze to Gold for one run, then the file restored. C00159 has three versions. Its history is Bronze, then Gold, then Bronze, with a valid range for each. Across all 397 customers there is exactly one current row each.
+- Design choice: I first used dates, and that lost a version when two changes happened on the same day. Timestamps fixed it. That also means the history starts at the first load after this change. The table was rebuilt for that reason.
+
+**3. Store capacity check (both pipelines, Warning).** `capacity.daily_orders_within_capacity` counts orders per store per day against `capacity_orders_per_day`. It runs in the ETL audit and in `46_mart_store_capacity.sql` for ELT. Warning only, because the orders still load.
+- Result (images 17 and 18): every store is within capacity except **S12, whose capacity in `stores.csv` is 0**. Every day with orders is therefore over capacity (31 of 31 days, in both pipelines). That is a data issue to raise with NammaMart, not a pipeline bug. A capacity of 0 should be a Critical catalogue error.
+
+**4. Data quality trend chart.** `include/nammamart/dq_trend.py` draws one bar per run from `dq_results`, for both DAGs, coloured by PASS, WARN and FAIL. The last task of the ETL DAG (`dq_trend_chart`, runs on `all_done`) rebuilds `include/reports/nammamart_dq_trend_pradeep.png` after every run. The chart is in image 15. The red FAIL segments are real: the sample data quarantines 311 rows in every run, so the chart shows a steady number of failing checks, and the early red spikes are the failure experiments.
+- Added `matplotlib` to `requirements.txt`, which needed an Airflow restart.
+- `include/reports/` is git-ignored because the chart is rebuilt on every run. The copy in `docs/screenshots/` is the one submitted.
+

@@ -3,6 +3,7 @@
 UI pages are real browser screenshots (headless Chrome). Query results and the quarantine file are
 rendered from live query output into a simple HTML grid and then screenshotted.
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs" / "screenshots"
-BASE = "http://localhost:8080"
+BASE = os.environ.get("AIRFLOW_UI", "http://localhost:8080")
 ETL, ELT = "nammamart_etl_pradeep", "nammamart_elt_pradeep"
 
 
