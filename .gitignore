@@ -20,3 +20,6 @@ include/warehouse_*.duckdb
 include/work/
 include/quarantine/pradeep/
 .venv-profile/
+
+# NammaMart bonus outputs (rebuilt on every run)
+include/reports/

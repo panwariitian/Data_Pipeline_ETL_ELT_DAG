@@ -18,6 +18,7 @@ from airflow.sdk import dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import CronTriggerTimetable
 
+from nammamart import alerts
 from nammamart import elt_core as elt
 
 IST = "Asia/Kolkata"
@@ -27,6 +28,7 @@ default_args = {
     "retries": 2,
     "retry_delay": timedelta(seconds=30),
     "execution_timeout": timedelta(minutes=15),
+    "on_failure_callback": alerts.notify_failure,
 }
 
 MARTS = [
@@ -35,6 +37,7 @@ MARTS = [
     ("mart_delivery_sla", "42_mart_delivery_sla.sql"),
     ("mart_payment_reconciliation", "43_mart_payment_reconciliation.sql"),
     ("mart_top_customers", "44_mart_top_customers.sql"),
+    ("mart_store_capacity", "46_mart_store_capacity.sql"),
 ]
 
 

@@ -18,6 +18,8 @@ from airflow.sdk import dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import CronTriggerTimetable
 
+from nammamart import alerts
+from nammamart import dq_trend
 from nammamart import etl_core as etl
 
 IST = "Asia/Kolkata"
@@ -27,6 +29,7 @@ default_args = {
     "retries": 2,
     "retry_delay": timedelta(seconds=30),
     "execution_timeout": timedelta(minutes=15),
+    "on_failure_callback": alerts.notify_failure,
 }
 
 
@@ -134,8 +137,12 @@ def nammamart_etl_pradeep():
     reconciled = reconcile_payments(loaded, x_orders, x_payments)
     reported = report(reconciled)
 
+    @task(trigger_rule="all_done", retries=0)
+    def dq_trend_chart(run_id=None):
+        return dq_trend.build()
+
     audit = run_audit()
-    [reported, v_payments] >> audit
+    [reported, v_payments] >> audit >> dq_trend_chart()
 
 
 nammamart_etl_pradeep()
